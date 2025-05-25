@@ -172,3 +172,18 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
+
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+venv/
+.ipynb_checkpoints/
+.pytest_cache/
+
+# Specific to this project
+model/*.pkl
+.env
+.DS_Store
