@@ -1,0 +1,113 @@
+name: CI/CD Pipeline for Wine Quality API
+
+on:
+  push:
+    branches:
+      - develop # Trigger on pushes to the develop branch for testing and image build
+      - main    # Trigger on pushes to the main branch for deployment
+
+env:
+  PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }} # Your Google Cloud Project ID
+  GCR_HOSTNAME: gcr.io                       # Google Container Registry hostname
+  IMAGE_NAME: wine-quality-api               # Name of your Docker image
+
+jobs:
+  build-and-test:
+    name: Build and Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.9' # Use the same Python version as in your Dockerfile
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pytest # Install pytest for running tests
+
+      - name: Run tests
+        run: pytest tests/ # Execute tests in the 'tests/' directory
+
+      - name: Authenticate to Google Cloud (GCR)
+        id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
+
+      - name: Configure Docker to use gcloud as a credential helper
+        run: gcloud auth configure-docker ${GCR_HOSTNAME}
+
+      - name: Build and push Docker image to GCR
+        id: build-image
+        run: |
+          # Build the Docker image with a tag including the commit SHA for uniqueness
+          docker build -t ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:${{ github.sha }} .
+          # Also tag with 'latest' for easy reference
+          docker tag ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:${{ github.sha }} ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:latest
+          # Push both tagged images to GCR
+          docker push ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:${{ github.sha }}
+          docker push ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:latest
+        # Output the full image name for subsequent steps (e.g., deployment)
+        # This makes the image name available as `steps.build-image.outputs.image`
+        # for other jobs or steps.
+        # Note: GitHub Actions does not directly support outputs for `run` steps in the same way
+        # as a custom action. We'll rely on the image being pushed with the SHA.
+        # For deployment, we'll explicitly use the SHA from `github.sha`.
+
+  deploy:
+    name: Deploy to Google Cloud VM
+    runs-on: ubuntu-latest
+    needs: build-and-test # This job depends on the build-and-test job completing successfully
+    if: github.ref == 'refs/heads/main' # Only deploy when pushing to the main branch
+
+    steps:
+      - name: Authenticate to Google Cloud
+        id: 'auth'
+        uses: 'google-github-actions/auth@v2'
+        with:
+          credentials_json: '${{ secrets.GCP_SA_KEY }}'
+
+      - name: Set up Cloud SDK
+        uses: 'google-github-actions/setup-gcloud@v2'
+
+      - name: Deploy to VM
+        run: |
+          # Define VM instance details
+          VM_ZONE="europe-west1-b" # Choose a GCP zone close to you or your users
+          VM_INSTANCE_NAME="wine-quality-api-vm"
+          
+          # Ensure the VM instance exists and is running.
+          # This command creates the VM if it doesn't exist, or starts it if it's stopped.
+          # We'll use a pre-existing VM setup for simplicity in this workflow.
+          # In a real-world scenario, you might have a separate Terraform/Pulumi script
+          # to provision infrastructure.
+          
+          # For deployment, we'll SSH into the VM and pull/run the latest Docker image.
+          # This assumes Docker is already installed and running on the VM.
+          # Replace 'YOUR_VM_USERNAME' with the actual username on your VM (e.g., 'your-user' or 'gcp-user')
+          # The VM needs to have the 'gcr.io' or 'artifact-registry.pkg.dev' domain configured for Docker login.
+          # This is usually handled by the 'gcloud auth configure-docker' command on the VM itself,
+          # or by setting up a service account for the VM with Container Registry access.
+          
+          # Stop and remove any existing container
+          gcloud compute ssh ${VM_INSTANCE_NAME} --zone=${VM_ZONE} --command="
+            docker stop ${IMAGE_NAME} || true && \
+            docker rm ${IMAGE_NAME} || true
+          "
+          
+          # Pull the latest image (or specific SHA image) and run it
+          gcloud compute ssh ${VM_INSTANCE_NAME} --zone=${VM_ZONE} --command="
+            docker pull ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:${{ github.sha }} && \
+            docker run -d --name ${IMAGE_NAME} -p 80:5000 ${GCR_HOSTNAME}/${PROJECT_ID}/${IMAGE_NAME}:${{ github.sha }}
+          "
+          echo "Deployment to VM ${VM_INSTANCE_NAME} successful!"
+
