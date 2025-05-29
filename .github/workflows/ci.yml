@@ -32,7 +32,10 @@ jobs:
           pip install pytest # Install pytest for running tests
 
       - name: Run tests
-        run: pytest tests/ # Execute tests in the 'tests/' directory
+        run: |
+          export PYTHONPATH=$(pwd)
+          pytest tests/
+        
 
       - name: Authenticate to Google Cloud (GCR)
         id: 'auth'
