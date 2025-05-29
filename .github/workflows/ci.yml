@@ -33,7 +33,12 @@ jobs:
 
       - name: Run tests
         run: |
+
         # run: pytest tests/ # Execute tests in the 'tests/' directory
+
+          export PYTHONPATH=$(pwd)
+          pytest tests/
+        
 
       - name: Authenticate to Google Cloud (GCR)
         id: 'auth'
